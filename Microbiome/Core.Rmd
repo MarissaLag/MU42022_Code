@@ -1,0 +1,98 @@
+---
+title: "Core Analysis MU42022"
+output: html_document
+date: "2025-04-10"
+
+#To find core (90% threshold) across all timepoints 
+#source: https://microbiome.github.io/tutorials/core_venn.html
+
+#Packages
+install.packages("eulerr")
+library(eulerr)
+install.packages("microbiomeutilities")
+devtools::install_github('microsud/microbiomeutilities')
+library(microbiomeutilities)
+install.packages("microbiome")
+library(microbiome)
+install.packages("Venndiagram")
+library(Venndiagram)
+
+#Set ploting theme
+
+theme.marissa <- function() {
+  theme_classic(base_size = 14) +
+    theme(
+      panel.border = element_blank(),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.text = element_text(size = 14),
+      axis.title = element_text(size = 16, face = "bold"),
+      legend.text = element_text(size = 16),
+      legend.title = element_text(size = 16, face = "bold"))
+}
+
+theme_set(theme.marissa())
+
+#Renaming Age
+MU42022_filtered_Oct92024@sam_data$Age <- recode(
+  MU42022_filtered_Oct92024@sam_data$Age,
+  "Day 01" = "1 dpf",
+  "Day 03" = "3 dpf",
+  "Day 06" = "6 dpf",
+  "Day 15" = "15 dpf",
+  "Spat"   = "90 dpf"
+)
+
+#Load RDS and filter
+pseq <- MU42022_filtered_Oct92024
+pseq <- subset_samples(pseq, !Organism %in% "Algae") 
+pseq <- subset_samples(pseq, !Genetics %in% "4")
+pseq <- subset_samples(pseq, !Treatment %in% "High temperature")
+
+#Convert to compositional
+pseq <- microbiome::transform(pseq, "compositional")
+
+#Get variable to analyze
+Treatment <- unique(sample_data(pseq)$Treatment)
+
+#Find core for each treatment across all time points
+list_core <- c() # an empty object to store information
+
+for (n in Treatment){ # for each variable n in Treatment
+  
+  ps.sub <- subset_samples(pseq, Treatment == n) 
+  
+  core_m <- core_members(ps.sub, # ps.sub is phyloseq selected with only samples from g 
+                         detection = 0.001, # 0.001 in atleast 90% samples 
+                         prevalence = 0.90)
+  print(paste0("No. of core taxa in ", n, " : ", length(core_m)))
+  list_core[[n]] <- core_m
+}
+
+#Plot venn
+mycols <- c("grey", "cornflowerblue", "orange")
+list_core <- list_core[c("Control", "Probiotics", "Probiotics + HT")]
+plot(venn(list_core), fills = mycols, font = 12)
+
+#Plot boxplots of core members across time
+asv_ids <- c("ASV1", "ASV3", "ASV8", "ASV10", "ASV11")
+
+# Filter the phyloseq object to only include these ASVs
+pseq_filtered <- prune_taxa(taxa_names(pseq) %in% asv_ids, pseq)
+pseq_filtered <- psmelt(pseq_filtered)
+pseq_filtered$OTU <- factor(pseq_filtered$OTU, levels = c("ASV1", "ASV3", "ASV8", "ASV10", "ASV11"))
+
+#plot
+ggplot(pseq_filtered, aes(x = Age, y = Abundance, fill = Treatment)) +
+  geom_boxplot(outlier.size = 1, position = position_dodge(0.8)) +  # Box plot with dodged positions for treatments
+  facet_wrap(~ OTU, scales = "free_y") +  # Facet by OTU
+  scale_fill_manual(values = c("darkgrey", "cornflowerblue", "orange")) + 
+  labs(title = "",
+       x = "",
+       y = "Relative Abundance") +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+        strip.text = element_text(face = "bold"),
+        legend.position = "bottom"
+        )
+

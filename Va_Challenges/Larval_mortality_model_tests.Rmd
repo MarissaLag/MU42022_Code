@@ -1,0 +1,451 @@
+---
+title: "Larval_mortality_model_tests"
+output: html_document
+date: "2025-12-01"
+---
+#ANOVA for MU42022 larval vibrio challenge
+#Marissa Wright-LaGreca
+
+##source: https://www.statology.org/three-way-anova-in-r/
+
+#Load packages
+
+install.packages("datarium")
+install.packages("rstatix")
+install.packages("ggpubr")
+install.packages("tidyverse")
+install.packages("ggResidpanel")
+install.packages("DHARMa")
+install.packages("lme4")
+install.packages("fitdistrplus")
+install.packages("agricolae")
+install.packages("performance")
+install.packages("emmeans")
+
+
+library("datarium")
+library(tidyverse)
+library(ggpubr)
+library(rstatix)
+library(ggResidpanel)
+library(DHARMa)
+library(lme4)
+library(fitdistrplus)
+library(ggplot2)
+library(hrbrthemes)
+library(dplyr)
+library(tidyr)
+library(viridis)
+library(agricolae)
+library(emmeans)
+library(car)
+library("performance")
+
+#set theme
+theme.marissa <- function() {
+  theme_classic(base_size = 14) +
+    theme(
+      panel.border = element_blank(),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.text = element_text(size = 14),
+      axis.title = element_text(size = 16, face = "bold"),
+      legend.text = element_text(size = 16),
+      legend.title = element_text(size = 16, face = "bold"))
+}
+
+theme_set(theme.marissa())
+
+#Import data - binary survival data
+
+Vibrio_Challenge_07_13_2022 <- read_excel("Documents/MSc/larval vibrio challenge/Vibrio Challenge 07-13-2022.xlsx", 
+                                          +     sheet = "glmer_R")
+
+Data <- Vibrio_Challenge_07_13_2022
+
+#Binomial glm and GLMER ----
+#Since survival data is binomial, use glm (family = binomial)
+#Because density of larvae per well may have impacted survival, include as a random effect
+#to see if it improves model fit (i.e., impacted survival)
+
+str(Data)
+Data$Genetics <- as.factor(Data$Genetics)
+Data$Treatment <- as.factor(Data$Treatment)
+Data$Tank <- as.factor(Data$Tank)
+Data$Well <- as.factor(Data$Well)
+
+#because no control tank for Family 4, creates unbalanced design
+#Unbalanced designs with glmers is a problem - must use ANOVA type 2 and results are approximate
+
+#To remove F4 (create a balanced design)
+Data_noF4 <- Data %>%
+filter(!Genetics == "4")
+
+#Remove High temperature (very few larvae)
+Data_noF4 <- Data_noF4 %>%
+  filter(!Treatment == "High temperature (HT)")
+
+#keep data Binary format but add well density as a random effect
+Data_well_noF4 <- Data_noF4 %>%
+  group_by(Well) %>%
+  mutate(Well_density = n())
+
+Data_well <- Data %>%
+  group_by(Well) %>%
+  mutate(Well_density = n())
+
+str(Data_well)
+Data_well_noF4$Well_density <- as.numeric(Data_well_noF4$Well_density)
+
+#glmer - random effect = well 
+model <- glmer(Survival ~ Treatment*Genetics + (1|Well_density),
+              data = Data_well_noF4, family = binomial)
+#including interaction term improved AIC
+summary(model)
+
+Anova(model, type = "II") #type 2 because unbalanced design (If genetics 4 is included)
+Anova(model) #interaction (treatmentxgenetics was significant so should be included in model)
+#AIC = 357
+
+#compare to model without random effects
+model_1 <- glm(Survival ~ Genetics*Treatment -1,
+               data = Data_noF4, family = binomial)
+summary(model_1) #AIC = 355, variance for random effect is zero
+
+Anova(model_1)
+
+emm <- emmeans(model_1, ~ Treatment*Genetics)
+pairwise_results <- pairs(emm)
+summary(pairwise_results)
+pairwise_results <- pairs(emm, adjust = "bonferroni")
+summary(pairwise_results)
+
+#GLMER - Family as random effect ----
+
+model_3 <- glmer(Survival ~ Treatment + (1|Genetics),
+               data = Data_noF4, family = binomial)
+summary(model_3)
+Anova(model_3)
+resids <- simulateResiduals(model_3)
+plot(resids)
+
+emm <- emmeans(model_3, ~ Treatment)
+pairwise_results <- pairs(emm)
+summary(pairwise_results)
+pairwise_results <- pairs(emm, adjust = "bonferroni") #correct for multiple testing
+
+#Check for overdispersion
+overdisp_fun <- function(model_3) {
+  rdf <- df.residual(model_3)
+  rp <- residuals(model_1, type = "pearson")
+  Pearson.chisq <- sum(rp^2)
+  prat <- Pearson.chisq / rdf
+  pval <- pchisq(Pearson.chisq, df = rdf, lower.tail = FALSE)
+  c(chisq = Pearson.chisq, ratio = prat, rdf = rdf, p = pval)
+}
+
+overdisp_fun(model_3) #No overdispersion
+
+#Plot
+# Add predicted values to the dataset
+Data_noF4$Predicted <- predict(model_3, type = "response")
+# Summarize data by Treatment
+summary_data <- Data_noF4 %>%
+  group_by(Treatment) %>%
+  summarize(
+    Mean_Prob = mean(Predicted),
+    Lower_CI = quantile(Predicted, 0.025),
+    Upper_CI = quantile(Predicted, 0.975)
+  )
+
+
+ggplot(summary_data, aes(x = Treatment, y = Mean_Prob, colour = Treatment)) +
+  geom_point(size = 3,) +  # Plot mean probabilities
+  geom_errorbar(aes(ymin = Lower_CI, ymax = Upper_CI), width = 0.2) +  # Error bars
+  labs(
+    title = "Predicted Death Probabilities by Treatment",
+    x = "Treatment",
+    y = "Predicted Survival Probability"
+  )
+
+#0 = survival and 1 = death, so reverse predicted values
+# Calculate survival probabilities
+Data_noF4$Survival_Prob <- 1 - Data_noF4$Predicted
+
+# Summarize survival probabilities by treatment
+summary_data <- Data_noF4 %>%
+  group_by(Treatment) %>%
+  summarize(
+    Mean_Prob = mean(Survival_Prob),
+    Lower_CI = quantile(Survival_Prob, 0.025),
+    Upper_CI = quantile(Survival_Prob, 0.975)
+  )
+
+summary_data <- summary_data %>%
+  mutate(Treatment = case_when(
+    Treatment == "Probiotic" ~ "Probiotics",
+    TRUE ~ Treatment
+  ))
+
+# Plot survival probabilities
+ggplot(summary_data, aes(x = Treatment, y = Mean_Prob, colour = Treatment)) +
+  geom_point(size = 7) +  # Plot mean probabilities
+  geom_errorbar(aes(ymin = Lower_CI, ymax = Upper_CI), width = 0.4) + 
+  labs(
+    title = "",
+    x = "",
+    y = "Predicted Survival Probability"
+  ) +
+  scale_color_manual(
+    values = c(
+      "Control" = "grey",
+      "Probiotics" = "skyblue2",
+      "Probiotics + HT" = "orange"
+    )
+  ) +
+  theme(legend.position = "right")
+
+#Basic plots ----
+#Not HT treatment or family 4 used
+
+
+
+#In glmer model, got singular fit warning
+#means that some random effect variance components are near zero, 
+#and the model may be overfitting. To check for singularity:
+isSingular(model, tol = 1e-05) #TRUE - suggests random effect does not improve model
+summary(model)$varcor  # Check variance components - it is zero, suggesting random effect does not improve model
+
+#Test model: HT treatment is included ----
+#Try with and without F4
+Data <- Vibrio_Challenge_07_13_2022 #excel sheet titled "glmer_R"
+str(Data)
+Data$Genetics <- as.factor(Data$Genetics)
+Data$Treatment <- as.factor(Data$Treatment)
+
+Data_4 <- Data %>%
+  filter(Genetics == "4")
+
+model_2 <- glm(Survival ~ Treatment,
+               data = Data_3, family = binomial)
+summary(model_2) #AIC = 355, variance for random effect is zero
+
+Anova(model_2)
+
+
+#Look at glm residuals
+
+# Create a QQ plot of residuals
+resids <- simulateResiduals(model_1)
+plot(resids) #no issues with DHARMa residual tests
+
+#Check for overdispersion (problem with binomial models)
+
+overdisp_fun <- function(model_1) {
+  rdf <- df.residual(model_1)
+  rp <- residuals(model_1, type = "pearson")
+  Pearson.chisq <- sum(rp^2)
+  prat <- Pearson.chisq / rdf
+  pval <- pchisq(Pearson.chisq, df = rdf, lower.tail = FALSE)
+  c(chisq = Pearson.chisq, ratio = prat, rdf = rdf, p = pval)
+}
+
+overdisp_fun(model_1) #p value is nonsignif - no overdispersion which is good
+
+Anova(model_1) #type 2 anova
+#All terms are signif
+
+#post-hoc test - pairwise comparisons of estimated marginal means (emmeans)
+
+emm <- emmeans(model_2, ~ Treatment * Genetics)
+pairwise_results <- pairs(emm)
+summary(pairwise_results)
+pairwise_results <- pairs(emm, adjust = "bonferroni") #correct for multiple testing
+
+
+# Calculate confidence intervals if not included
+emm_summary <- summary(emm, infer = c(TRUE, TRUE))  # this should include confidence limits
+
+custom_colors <- c("grey","skyblue2", "orange", "red")
+
+# Create the plot
+ggplot(emm_summary, aes(x = interaction(Treatment, Genetics), y = 1 - emmean, fill = Treatment)) +  # Use fill to indicate treatment
+  geom_bar(stat = "identity", position = "dodge", color = "black") +  # Add black outline to bars
+  geom_errorbar(aes(ymin = (1 - emmean) - SE, ymax = (1 - emmean) + SE), width = 0.2) +  # Adjust error bars accordingly
+  labs(title = "Estimated Marginal Means of Survival",
+       x = "",
+       y = "Estimated Marginal Mean of Survival") +  # Update y-axis label
+  scale_fill_manual(values = custom_colors) +  # Add custom colors
+  theme_bw() +
+  theme(legend.title = element_blank(),
+        panel.grid.major = element_blank(),  # Remove major gridlines
+        panel.grid.minor = element_blank(),  # Remove minor gridlines
+        panel.border = element_rect(color = "black", fill = NA),  # Add border around the plot area
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 12))
+
+#Test model: Include F4 ----
+Data_well <- Data %>%
+  group_by(Well) %>%
+  mutate(Well_density = n())
+
+str(Data_well)
+Data_well$Genetics <- as.factor(Data_well$Genetics)
+Data_well$Treatment <- as.factor(Data_well$Treatment)
+#Compare model when F4 is added - note, creates unbalanced design
+model_2 <- glm(Survival ~ Treatment*Genetics,
+               data = Data_well, family = binomial)
+summary(model_2) #AIC = 359, variance for random effect is zero
+
+#Look at glm residuals
+
+# Create a QQ plot of residuals
+resids <- simulateResiduals(model_2)
+plot(resids) #no issues
+
+Anova(model_2)
+
+AIC(model_1, model_2)
+
+
+emm <- emmeans(model_1, ~ Treatment)
+pairwise_results <- pairs(emm)
+summary(pairwise_results)
+pairwise_results <- pairs(emm, adjust = "bonferroni") #correct for multiple testing
+
+custom_colors <- c("grey",  "orange","skyblue", "lightgreen")  
+emm_summary <- summary(emm, infer = c(TRUE, TRUE))  # this should include confidence limits
+
+# Create the plot
+# Custom labeller function to rename facet labels
+family_labels <- c("1" = "Family 1", "2" = "Family 2", "3" = "Family 3")
+
+# Create the plot
+ggplot(emm_summary, aes(x = interaction(Treatment, Genetics), y = 1 - emmean, fill = Treatment)) +  # Use fill to indicate treatment
+  geom_bar(stat = "identity", position = "dodge", color = "black") +  # Add black outline to bars
+  geom_errorbar(aes(ymin = (1 - emmean) - SE, ymax = (1 - emmean) + SE), width = 0.2) +  # Adjust error bars accordingly
+  labs(title = "",
+       x = "",
+       y = "Estimated Marginal Mean Survival") +  
+  scale_fill_manual(values = custom_colors) + 
+  theme_bw() +
+  theme(legend.title = element_blank(),
+        panel.grid.major = element_blank(),  
+        panel.grid.minor = element_blank(),  
+        panel.border = element_rect(color = "black", fill = NA),  # Add border around the plot area
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+        strip.background = element_rect(fill = "white", color = NA),  # Remove grey background
+        strip.text = element_text(face = "bold", size = 12)) +  # Bolden facet labels
+  facet_wrap(~ Genetics, scales = "free_x", labeller = labeller(Genetics = family_labels))  # Use custom labels for Genetics
+
+ggplot(emm_summary, x = Treatment, y = 1 - emmean, fill = Treatment)) +  # Use fill to indicate treatment
+  geom_bar(stat = "identity", position = "dodge", color = "black") +  # Add black outline to bars
+  geom_errorbar(aes(ymin = (1 - emmean) - SE, ymax = (1 - emmean) + SE), width = 0.2) +  # Adjust error bars accordingly
+  labs(title = "",
+       x = "",
+       y = "Estimated Marginal Mean Survival") +  
+  scale_fill_manual(values = custom_colors) + 
+  theme_bw() +
+  theme(legend.title = element_blank(),
+        panel.grid.major = element_blank(),  
+        panel.grid.minor = element_blank(),  
+        panel.border = element_rect(color = "black", fill = NA),  # Add border around the plot area
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+        strip.background = element_rect(fill = "white", color = NA),  # Remove grey background
+        strip.text = element_text(face = "bold", size = 12)) +  # Bolden facet labels
+  facet_wrap(~ Genetics, scales = "free_x", labeller = labeller(Genetics = family_labels))  # Use custom labels for Genetics
+
+
+#Look at just treatment effects
+
+model_combined <- glm(Survival ~ Treatment,
+                      data = Data_well_noF4, family = binomial)
+summary(model_combined)
+emmeans_combined <- emmeans(model_combined, pairwise ~ Treatment)
+emmeans_combined <- pairs(emmeans_combined, adjust = "bonferroni")
+
+
+
+#Test correlation between well density & % survival of a well ----
+
+custom_colors <- c("grey", "skyblue2", "orange",)  
+
+#Calculate % survival for each treatment group
+Survival <- Data_well_noF4 %>%
+  group_by(Treatment) %>%
+  summarise(Count_Zeros = sum(Survival == 0, na.rm = TRUE),
+            Total_Count = n(),
+            Percent_Zeros = (Count_Zeros / Total_Count) * 100,
+            std = sd((Survival == 0) * 100, na.rm = TRUE),  # Calculate std based on individual values
+            SE = std / sqrt(Total_Count))  # Standard Error
+
+
+Survival_noF4 <- Data_well_noF4 %>%
+  group_by(Treatment, Genetics, Well_density) %>%
+  summarise(Percent_Zeros = mean(Survival == 0, na.rm = TRUE) * 100)
+
+Survival_SD <- Survival %>%
+  group_by(Treatment) %>%
+  summarise(Avg = mean(Percent_Zeros),
+            SD = sd(Percent_Zeros, na.rm = TRUE))
+View(Survival_SD)
+
+# Convert Well_density to a factor with ordered levels from lowest to highest
+Survival_noF4$Well_density <- factor(Survival_noF4$Well_density, levels = sort(unique(Survival_noF4$Well_density)))
+
+ggplot(Survival, aes(x = Treatment, y = Percent_Zeros, fill = Treatment)) +
+  geom_col(width = 0.9, colour = "black") +  # Use geom_col() to set heights directly
+  scale_fill_manual(values = custom_colors) +
+  geom_errorbar(aes(ymin = Percent_Zeros - SE, ymax = Percent_Zeros + SE), 
+                width = 0.3, position = position_dodge(width = 0.9)) +  # Add error bars
+  labs(title = "No F4",
+       x = "",  # Update x-axis label to reflect treatment
+       y = "Percent (%) Survival") +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(size = 11, angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 11),
+        axis.title.y = element_text(size = 12)) +
+  ylim(0, 100)
+
+
+# Ensure Well_density is numeric for the line of best fit
+Survival$Well_density <- as.numeric(as.character(Survival$Well_density))
+
+#Test for correlation between % survival and well density
+correlation_test <- cor.test(Survival_noF4$Well_density, Survival_noF4$Percent_Zeros, method = "pearson")
+correlation_coefficient <- round(correlation_test$estimate, 2)
+p_value <- round(correlation_test$p.value, 3)
+
+#Plot correlation
+ggplot(Survival_noF4, aes(x = Well_density, y = Percent_Zeros)) +
+  geom_point(aes(color = Treatment), size = 3, position = position_jitter(width = 0.2)) +  # Add jitter to avoid overplotting
+  geom_smooth(method = "lm", se = TRUE, color = "black") +  # Line of best fit for all data
+  scale_color_manual(values = custom_colors) +
+  labs(title = "No F4",
+       x = "Well Density",  # X-axis label
+       y = "Percent (%) Survival") +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(size = 11, face = "bold", angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 11, face = "bold"),
+        axis.title.y = element_text(size = 12, face = "bold")) +
+  ylim(0, 110) +
+  # Annotate plot with correlation coefficient and p-value
+  annotate("text", x = Inf, y = Inf, label = paste("R =", correlation_coefficient, "\n", "p =", p_value), 
+           hjust = 1.1, vjust = 1.1, size = 5, color = "black", fontface = "bold")
+
+
+#Bar plots 
+ggplot(Survival_noF4, aes(x = reorder(Well_density, Percent_Zeros), y = Percent_Zeros, fill = Treatment)) +
+  geom_bar(stat = "identity", colour = "black", width = 0.9) +  # Set width to 0.9
+  scale_fill_manual(values = custom_colors) +
+  # geom_errorbar(aes(ymin = Avg - SD, ymax = Avg + SD), width = 0.3, position = position_dodge(width = 0.9)) +  # Add error bars for SD
+  labs(title = "All families",
+       x = "Well Density",  # Add x-axis label
+       y = "Percent (%) Survival") +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(size = 11, face = "bold", angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 11, face = "bold"),
+        axis.title.y = element_text(size = 12, face = "bold")) +
+  ylim(0, 110)
