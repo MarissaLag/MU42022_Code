@@ -1,10 +1,10 @@
 # https://bioconductor.org/help/course-materials/2017/BioC2017/Day1/Workshops/Microbiome/MicrobiomeWorkflowII.html
 
 #Packages ----
-setwd("/Users/greent/Desktop/Amplicon_Seq_data_Aug_2023/Marissa_Seqs")
+setwd("~/Desktop/Amplicon_Seq_data_Aug_2023")
 
 # Clear workspace 
-# rm(list=ls())
+rm(list=ls())
 
 if (!requireNamespace("BiocManager", quietly = TRUE))
   install.packages("BiocManager")
@@ -36,14 +36,12 @@ set.seed(100)
 
 #Load seqs ----
 ####Tell R where the data is...
-miseq_path <- "R1R2_SMK_2024/"
+miseq_path <- "MaWr0001-230825_M04981_0381_000000000-L53VF/"
 list.files(miseq_path)
-
 # Sort ensures forward/reverse reads are in same order. notice the pattern (two different reads, Forward and Reverse)
-fnFs <- sort(list.files(miseq_path, pattern="_R1_001.fastq"))
-fnRs <- sort(list.files(miseq_path, pattern="_R2_001.fastq"))
-#fnFs <- sort(list.files(miseq_path, pattern="_R1_001.fastq"))
-#fnRs <- sort(list.files(miseq_path, pattern="_R2_001.fastq"))
+fnFs <- sort(list.files(miseq_path, pattern="_R1_001.fastq.gz"))
+fnRs <- sort(list.files(miseq_path, pattern="_R2_001.fastq.gz"))
+
 # Extract sample names, assuming filenames have format: SAMPLENAME_XXX.fastq
 sampleNames <- sapply(strsplit(fnFs, "_"), `[`, 1)
 # Specify the full path to the fnFs and fnRs
@@ -57,7 +55,7 @@ fnRs[1:3]
 #Seq quality ----
 #Quality of reads: Most Illumina sequencing data shows a trend of decreasing average quality towards the end of sequencing reads.
 plotQualityProfile(fnFs[1:10])
-plotQualityProfile(fnRs[50:59])
+plotQualityProfile(fnRs[1:10])
 
 filt_path <- file.path(miseq_path, "filtered") # Place filtered files in filtered/ subdirectory
 if(!file_test("-d", filt_path)) dir.create(filt_path)
