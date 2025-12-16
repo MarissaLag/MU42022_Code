@@ -1,0 +1,185 @@
+#Building phylogenetic trees with ASV data
+#Project MU42022
+
+##Packages ----
+install.packages("devtools")
+library(devtools)
+install.packages("phyloseq")
+library(phyloseq)
+install.packages("microbiome")
+library(microbiome)
+install.packages("DECIPHER")
+library(DECIPHER)
+install.packages("phangorn")
+library(phangorn)
+install.packages("ggtree")
+library(ggtree)
+install.packages("ape")
+library(ape)
+install.packages("Biostrings")
+library(Biostrings)
+
+##Load data ----
+MU42022_filtered_Oct92024 <- readRDS("~/Documents/GitHub/Phyloseq and microbiome analysis/Old RDS files/MU42022_filtered_Oct92024.rds")
+
+pseq <- MU42022_filtered_Oct92024
+pseq <- microbiome::transform(pseq, "compositional")
+
+#Optional: filter data
+pseq <- subset_samples(pseq, !Genetics == "4")
+pseq <- subset_samples(pseq, Age == "Spat")
+#Remove zero abundance ASVs
+any(taxa_sums(pseq) == 0)
+pseq <- prune_taxa(taxa_sums(pseq) > 0, pseq)
+any(taxa_sums(pseq) == 0)
+
+#Convert to psmelt object ----
+pseq <- psmelt(pseq) 
+
+#ASVs ----
+#Merge ASV seq with metadata
+colnames(MU42022_sequence_ASVname_mapping) <- c("ASV", "Sequence")
+
+# Merge the ASV table with the sequence data based on ASV number
+merged_data <- merge(pseq, MU42022_sequence_ASVname_mapping, by.x = "OTU", by.y = "ASV", all.x = TRUE)
+
+#Trees ----
+sequences <- unique(merged_data$Sequence)
+names(sequences) <- unique(merged_data$OTU)
+dna_sequences <- DNAStringSet(sequences)
+
+# Align the sequences
+aligned_sequences <- AlignSeqs(dna_sequences)
+
+# Convert DNAStringSet to a character matrix
+aligned_matrix <- as.matrix(aligned_sequences)
+
+# Convert the matrix to a phyDat object
+aligned_phyDat <- phyDat(aligned_matrix, type = "DNA")
+print(aligned_phyDat)
+
+# Compute the distance matrix
+dist_matrix <- dist.ml(aligned_phyDat)
+
+# Build the phylogenetic tree
+tree <- NJ(dist_matrix)
+
+# Plot the tree
+plot(tree, main = "Phylogenetic Tree", cex = 0.35)  # Adjust cex as needed
+
+#Optional: highlight ASVs signficant in indicspecies analysis
+highlighted_ASVs_red <- c("ASV11", "ASV88", "ASV198", "ASV178", "ASV201", "ASV471", "ASV613")
+#Optional: highlight probiotic ASVs
+highlighted_ASVs_blue <- c("ASV7", "ASV18")
+
+# Get the tip labels
+tip_labels <- tree$tip.label
+
+# Add red and blue bold labels for the specified ASVs
+for (i in seq_along(tip_labels)) {
+  if (tip_labels[i] %in% highlighted_ASVs_red) {
+    tiplabels(text = tip_labels[i], tip = i, col = "red", font = 2, cex = 1)
+  } else if (tip_labels[i] %in% highlighted_ASVs_blue) {
+    tiplabels(text = tip_labels[i], tip = i, col = "blue", font = 2, cex = 1)
+  }
+}
+
+#Optional: remove all other tip labels
+# Get the tip labels
+tip_labels <- tree$tip.label
+
+# Create a vector for labels, only keeping the selected ASVs and removing the rest
+new_tip_labels <- ifelse(tip_labels %in% c(highlighted_ASVs_red, highlighted_ASVs_blue), tip_labels, NA)
+
+# Plot the tree without labels
+plot(tree, main = "Phylogenetic Tree", cex = 0.4, show.tip.label = FALSE)
+
+# Add colored labels for selected ASVs
+p <- for (i in seq_along(tip_labels)) {
+  if (tip_labels[i] %in% highlighted_ASVs_red) {
+    tiplabels(text = tip_labels[i], tip = i, col = "red", font = 2, cex = 1.2)
+  } else if (tip_labels[i] %in% highlighted_ASVs_blue) {
+    tiplabels(text = tip_labels[i], tip = i, col = "blue", font = 2, cex = 1.2)
+  }
+}
+
+#Roseobacter group trees
+#Find Roseobacter genus in dataset (here, the only roseobacter)
+asv558_sequence <- rhodobacteraceae_data$Sequence[rhodobacteraceae_data$OTU == "ASV558"][1]
+
+rhodobacteraceae_data <- subset(merged_data, Family == "Rhodobacteraceae")
+#Extract unique sequences for the Rhodobacteraceae ASVs
+sequences <- unique(rhodobacteraceae_data$Sequence)
+names(sequences) <- unique(rhodobacteraceae_data$OTU)  # Assign ASV names to the sequences
+
+dna_sequences <- DNAStringSet(sequences)
+ref_seq <- dna_sequences[["ASV558"]]
+
+# Initialize a vector to store results
+roseobacter_matches <- list()
+for (i in names(dna_sequences)) {
+  # Skip if the current sequence is ASV558 itself
+  if (i == "ASV558") next
+  
+  # Perform global pairwise alignment between ASV558 and the current sequence
+  alignment <- pairwiseAlignment(ref_seq, dna_sequences[[i]], type = "global")
+  
+  # Calculate percentage identity
+  identity <- mean(pid(alignment), na.rm = TRUE)  # Remove NAs
+  
+  # If identity is not NA and similarity is 89% or higher, add to the list of Roseobacter matches
+  if (!is.na(identity) && identity >= 89) {
+    roseobacter_matches[[i]] <- dna_sequences[[i]]
+  }
+}
+
+# Check the results
+print(roseobacter_matches)
+names(roseobacter_matches)
+
+#Add ASV558 back
+roseobacter_matches[["ASV558"]] <- ref_seq
+names(roseobacter_matches)
+
+#Filter the dataframe for ASVs in roseobacter_matches
+roseobacter_df <- rhodobacteraceae_data[rhodobacteraceae_data$OTU %in% names(roseobacter_matches), ]
+
+# Ensure that we’re extracting unique ASV sequences
+roseobacter_sequences <- unique(roseobacter_df[c("OTU", "Sequence")])
+
+sequences <- unique(roseobacter_sequences$Sequence)
+names(sequences) <- unique(roseobacter_sequences$OTU)
+dna_sequences <- DNAStringSet(sequences)
+
+# Align the sequences
+aligned_sequences <- AlignSeqs(dna_sequences) 
+# Convert DNAStringSet to a character matrix
+aligned_matrix <- as.matrix(aligned_sequences)
+
+# Convert the matrix to a phyDat object
+aligned_phyDat <- phyDat(aligned_matrix, type = "DNA")
+
+# Check the phyDat object
+print(aligned_phyDat)
+
+# Compute the distance matrix
+dist_matrix <- dist.ml(aligned_phyDat)
+
+# Build the phylogenetic tree
+tree <- NJ(dist_matrix)
+plot(tree, main = "Roseobacter - Phylogenetic Tree", cex = 0.35)
+
+# highlighted_ASVs_red <- c("ASV11", "ASV88", "ASV198", "ASV178", "ASV201", "ASV471", "ASV613")
+# highlighted_ASVs_blue <- c("ASV7", "ASV18")
+
+# Get the tip labels
+tip_labels <- tree$tip.label
+
+# Add red and blue bold labels for the specified ASVs
+for (i in seq_along(tip_labels)) {
+  if (tip_labels[i] %in% highlighted_ASVs_red) {
+    tiplabels(text = tip_labels[i], tip = i, col = "red", font = 2, cex = 1.5)
+  } else if (tip_labels[i] %in% highlighted_ASVs_blue) {
+    tiplabels(text = tip_labels[i], tip = i, col = "blue", font = 2, cex = 1.5)
+  }
+}

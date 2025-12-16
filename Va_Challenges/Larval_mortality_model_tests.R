@@ -103,7 +103,7 @@ Anova(model) #interaction (treatmentxgenetics was significant so should be inclu
 #AIC = 357
 
 #compare to model without random effects
-model_1 <- glm(Survival ~ Genetics*Treatment -1,
+model_1 <- glm(Survival ~ Genetics*Treatment,
                data = Data_noF4, family = binomial)
 summary(model_1) #AIC = 355, variance for random effect is zero
 
@@ -114,6 +114,86 @@ pairwise_results <- pairs(emm)
 summary(pairwise_results)
 pairwise_results <- pairs(emm, adjust = "bonferroni")
 summary(pairwise_results)
+
+#Plot fixed effects model ----
+emm <- emmeans(model_1, ~ Treatment * Genetics, type = "response")
+emm_df <- as.data.frame(emm)
+
+emm_df <- emm_df %>%
+  mutate(
+    Survival = 1 - prob,
+    Lower = 1 - asymp.UCL,  # reverse CI
+    Upper = 1 - asymp.LCL
+  )
+
+# Rename treatments for plotting (optional)
+emm_df$Treatment <- factor(
+  emm_df$Treatment,
+  levels = c("Control", "Probiotic", "Probiotics + HT"),
+  labels = c("Control", "Roseobacter-enriched", "Roseobacter-enriched + HT")
+)
+
+# Custom color palette for the treatments
+treat_colors = c(
+  "Control" = "grey",
+  "Roseobacter-enriched" = "cornflowerblue",
+  "Roseobacter-enriched + HT" = "orange"
+)
+
+#facet labels
+gen_labels <- c(
+  "1" = "Family 1",
+  "2" = "Family 2",
+  "3" = "Family 3"
+)
+
+ggplot(emm_df, aes(x = Treatment, y = prob, fill = Treatment)) +
+  geom_col(alpha = 0.8, color = "black", linewidth = 1) +  # bar outlines
+  geom_errorbar(
+    aes(ymin = asymp.LCL, ymax = asymp.UCL),
+    width = 0.3,
+    linewidth = 1
+  ) +
+  facet_wrap(
+    ~ Genetics,
+    labeller = labeller(Genetics = gen_labels)
+  ) +
+  scale_fill_manual(values = treat_colors) +
+  labs(
+    x = NULL,
+    y = "Estimated Survival Probability",
+    fill = "Treatment"
+  ) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    #axis.line = element_line(size = 0.9, color = "black"),   # thicker axes
+    strip.text = element_text(size = 14, face = "bold"),
+    strip.background = element_rect(size = 2),  # thicker facet box
+    panel.border = element_rect(fill = NA, color = "black", size = 2),           # optional outer panel border
+    legend.position = "bottom"
+  )
+
+ggplot(emm_df, aes(x = Treatment, y = Survival, fill = Treatment)) +
+  geom_col(alpha = 0.8, color = "black", linewidth = 1) +
+  geom_errorbar(aes(ymin = Lower, ymax = Upper), width = 0.3, linewidth = 1) +
+  facet_wrap(~ Genetics, labeller = labeller(Genetics = gen_labels)) +
+  scale_fill_manual(values = treat_colors) +
+  labs(
+    x = NULL,
+    y = "Estimated Survival Probability",
+    fill = "Treatment"
+  ) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    strip.text = element_text(size = 14, face = "bold"),
+    strip.background = element_rect(size = 2),
+    panel.border = element_rect(fill = NA, color = "black", size = 2),
+    legend.position = "bottom"
+  )
+
+
 
 #GLMER - Family as random effect ----
 
@@ -182,155 +262,115 @@ summary_data <- summary_data %>%
     TRUE ~ Treatment
   ))
 
-# Plot survival probabilities
-ggplot(summary_data, aes(x = Treatment, y = Mean_Prob, colour = Treatment)) +
-  geom_point(size = 7) +  # Plot mean probabilities
-  geom_errorbar(aes(ymin = Lower_CI, ymax = Upper_CI), width = 0.4) + 
-  labs(
-    title = "",
-    x = "",
-    y = "Predicted Survival Probability"
-  ) +
-  scale_color_manual(
+#Correct treatment names
+
+# Direct replacement based on current values
+summary_data$Treatment[summary_data$Treatment == "Probiotic"] <- "Roseobacter-enriched"
+summary_data$Treatment[summary_data$Treatment == "Probiotic + Heat"] <- "Roseobacter-enriched + HT"
+summary_data$Treatment
+
+# Plot survival probabilities ----
+
+#haz ratio-like boxplot 
+ggplot(summary_data, aes(y = Treatment, x = Mean_Prob)) +
+  # Reference line (optional - add if there's a meaningful reference value)
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "darkgray", linewidth = 1) +
+  # Confidence interval lines
+  geom_errorbarh(aes(xmin = Lower_CI, xmax = Upper_CI), 
+                 height = 0, linewidth = 1.2) +
+  # Boxes for point estimates
+  geom_tile(aes(x = Mean_Prob, width = 0.02, height = 0.4, fill = Treatment),
+            color = "black", linewidth = 1) +
+  scale_fill_manual(
     values = c(
       "Control" = "grey",
-      "Probiotics" = "skyblue2",
-      "Probiotics + HT" = "orange"
-    )
+      "Roseobacter-enriched" = "cornflowerblue",
+      "Roseobacter-enriched + HT" = "orange"
+    ),
+    guide = "none"  # Remove legend since y-axis shows treatments
   ) +
-  theme(legend.position = "right")
+  scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+  labs(
+    x = "Predicted Survival Probability (95% CI)",
+    y = NULL
+  ) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.y = element_text(size = 14, face = "bold")
+  )
 
-#Basic plots ----
-#Not HT treatment or family 4 used
-
-
-
-#In glmer model, got singular fit warning
-#means that some random effect variance components are near zero, 
-#and the model may be overfitting. To check for singularity:
-isSingular(model, tol = 1e-05) #TRUE - suggests random effect does not improve model
-summary(model)$varcor  # Check variance components - it is zero, suggesting random effect does not improve model
 
 #Test model: HT treatment is included ----
 #Try with and without F4
-Data <- Vibrio_Challenge_07_13_2022 #excel sheet titled "glmer_R"
-str(Data)
-Data$Genetics <- as.factor(Data$Genetics)
-Data$Treatment <- as.factor(Data$Treatment)
+# Data <- Vibrio_Challenge_07_13_2022 #excel sheet titled "glmer_R"
+# str(Data)
+# Data$Genetics <- as.factor(Data$Genetics)
+# Data$Treatment <- as.factor(Data$Treatment)
+# 
+# # Data_4 <- Data %>%
+# #   filter(Genetics == "4")
+# 
+# model_2 <- glm(Survival ~ Treatment * Genetics,
+#                data = Data_well_noF4, family = binomial)
+# summary(model_2) #AIC = 355, variance for random effect is zero
+# 
+# Anova(model_2)
 
-Data_4 <- Data %>%
-  filter(Genetics == "4")
-
-model_2 <- glm(Survival ~ Treatment,
-               data = Data_3, family = binomial)
-summary(model_2) #AIC = 355, variance for random effect is zero
-
-Anova(model_2)
-
-
-#Look at glm residuals
-
-# Create a QQ plot of residuals
-resids <- simulateResiduals(model_1)
-plot(resids) #no issues with DHARMa residual tests
-
-#Check for overdispersion (problem with binomial models)
-
-overdisp_fun <- function(model_1) {
-  rdf <- df.residual(model_1)
-  rp <- residuals(model_1, type = "pearson")
-  Pearson.chisq <- sum(rp^2)
-  prat <- Pearson.chisq / rdf
-  pval <- pchisq(Pearson.chisq, df = rdf, lower.tail = FALSE)
-  c(chisq = Pearson.chisq, ratio = prat, rdf = rdf, p = pval)
-}
-
-overdisp_fun(model_1) #p value is nonsignif - no overdispersion which is good
-
-Anova(model_1) #type 2 anova
-#All terms are signif
-
-#post-hoc test - pairwise comparisons of estimated marginal means (emmeans)
-
-emm <- emmeans(model_2, ~ Treatment * Genetics)
-pairwise_results <- pairs(emm)
-summary(pairwise_results)
-pairwise_results <- pairs(emm, adjust = "bonferroni") #correct for multiple testing
-
-
-# Calculate confidence intervals if not included
-emm_summary <- summary(emm, infer = c(TRUE, TRUE))  # this should include confidence limits
-
-custom_colors <- c("grey","skyblue2", "orange", "red")
-
-# Create the plot
-ggplot(emm_summary, aes(x = interaction(Treatment, Genetics), y = 1 - emmean, fill = Treatment)) +  # Use fill to indicate treatment
-  geom_bar(stat = "identity", position = "dodge", color = "black") +  # Add black outline to bars
-  geom_errorbar(aes(ymin = (1 - emmean) - SE, ymax = (1 - emmean) + SE), width = 0.2) +  # Adjust error bars accordingly
-  labs(title = "Estimated Marginal Means of Survival",
-       x = "",
-       y = "Estimated Marginal Mean of Survival") +  # Update y-axis label
-  scale_fill_manual(values = custom_colors) +  # Add custom colors
-  theme_bw() +
-  theme(legend.title = element_blank(),
-        panel.grid.major = element_blank(),  # Remove major gridlines
-        panel.grid.minor = element_blank(),  # Remove minor gridlines
-        panel.border = element_rect(color = "black", fill = NA),  # Add border around the plot area
-        axis.text.x = element_text(angle = 45, hjust = 1, size = 12))
 
 #Test model: Include F4 ----
-Data_well <- Data %>%
-  group_by(Well) %>%
-  mutate(Well_density = n())
+# Data_well <- Data %>%
+#   group_by(Well) %>%
+#   mutate(Well_density = n())
+# 
+# str(Data_well)
+# Data_well$Genetics <- as.factor(Data_well$Genetics)
+# Data_well$Treatment <- as.factor(Data_well$Treatment)
+# #Compare model when F4 is added - note, creates unbalanced design
+# model_2 <- glm(Survival ~ Treatment*Genetics,
+#                data = Data_well, family = binomial)
+# summary(model_2) #AIC = 359, variance for random effect is zero
+# 
+# #Look at glm residuals
+# 
+# # Create a QQ plot of residuals
+# resids <- simulateResiduals(model_2)
+# plot(resids) #no issues
+# 
+# Anova(model_2)
+# 
+# AIC(model_1, model_2)
+# emm <- emmeans(model_1, ~ Treatment)
+# pairwise_results <- pairs(emm)
+# summary(pairwise_results)
+# pairwise_results <- pairs(emm, adjust = "bonferroni") #correct for multiple testing
 
-str(Data_well)
-Data_well$Genetics <- as.factor(Data_well$Genetics)
-Data_well$Treatment <- as.factor(Data_well$Treatment)
-#Compare model when F4 is added - note, creates unbalanced design
-model_2 <- glm(Survival ~ Treatment*Genetics,
-               data = Data_well, family = binomial)
-summary(model_2) #AIC = 359, variance for random effect is zero
 
-#Look at glm residuals
-
-# Create a QQ plot of residuals
-resids <- simulateResiduals(model_2)
-plot(resids) #no issues
-
-Anova(model_2)
-
-AIC(model_1, model_2)
-
-
-emm <- emmeans(model_1, ~ Treatment)
-pairwise_results <- pairs(emm)
-summary(pairwise_results)
-pairwise_results <- pairs(emm, adjust = "bonferroni") #correct for multiple testing
-
-custom_colors <- c("grey",  "orange","skyblue", "lightgreen")  
-emm_summary <- summary(emm, infer = c(TRUE, TRUE))  # this should include confidence limits
-
-# Create the plot
+# Create faceted family plot
 # Custom labeller function to rename facet labels
 family_labels <- c("1" = "Family 1", "2" = "Family 2", "3" = "Family 3")
 
 # Create the plot
-ggplot(emm_summary, aes(x = interaction(Treatment, Genetics), y = 1 - emmean, fill = Treatment)) +  # Use fill to indicate treatment
-  geom_bar(stat = "identity", position = "dodge", color = "black") +  # Add black outline to bars
-  geom_errorbar(aes(ymin = (1 - emmean) - SE, ymax = (1 - emmean) + SE), width = 0.2) +  # Adjust error bars accordingly
+family_labels <- c("1" = "Family 1", "2" = "Family 2", "3" = "Family 3")
+
+ggplot(Data_noF4, aes(x = Treatment, y = (1 - emmean), fill = Treatment)) + 
+  geom_bar(stat = "identity", position = "dodge", color = "black") +
+  geom_errorbar(aes(ymin = (1 - emmean) - SE, ymax = (1 - emmean) + SE), 
+                width = 0.2) +
   labs(title = "",
        x = "",
-       y = "Estimated Marginal Mean Survival") +  
+       y = "Estimated Marginal Mean Survival") +
   scale_fill_manual(values = custom_colors) + 
   theme_bw() +
   theme(legend.title = element_blank(),
         panel.grid.major = element_blank(),  
         panel.grid.minor = element_blank(),  
-        panel.border = element_rect(color = "black", fill = NA),  # Add border around the plot area
+        panel.border = element_rect(color = "black", fill = NA),
         axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
-        strip.background = element_rect(fill = "white", color = NA),  # Remove grey background
-        strip.text = element_text(face = "bold", size = 12)) +  # Bolden facet labels
-  facet_wrap(~ Genetics, scales = "free_x", labeller = labeller(Genetics = family_labels))  # Use custom labels for Genetics
+        strip.background = element_rect(fill = "white", color = NA),
+        strip.text = element_text(face = "bold", size = 12)) +
+  facet_wrap(~ Genetics, scales = "free_x", 
+             labeller = labeller(Genetics = family_labels))
 
 ggplot(emm_summary, x = Treatment, y = 1 - emmean, fill = Treatment)) +  # Use fill to indicate treatment
   geom_bar(stat = "identity", position = "dodge", color = "black") +  # Add black outline to bars
@@ -339,7 +379,6 @@ ggplot(emm_summary, x = Treatment, y = 1 - emmean, fill = Treatment)) +  # Use f
        x = "",
        y = "Estimated Marginal Mean Survival") +  
   scale_fill_manual(values = custom_colors) + 
-  theme_bw() +
   theme(legend.title = element_blank(),
         panel.grid.major = element_blank(),  
         panel.grid.minor = element_blank(),  
